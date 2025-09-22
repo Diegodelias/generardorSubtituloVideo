@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Procesando... | CAPTION</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <link href="{{ url_for('static', filename='caption-theme.css') }}" rel="stylesheet">
+</head>
+
+<body>
+    <nav class="navbar">
+        <div class="container">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-chat-square-text-fill"></i>
+                <span>CAPTION</span>
+            </a>
+        
+        </div>
+    </nav>
+
+    <div class="container upload-container">
+        <h1>Estamos procesando tu video</h1>
+        <p class="lead">Esto puede tardar unos momentos. Por favor, no cierres esta ventana.</p>
+
+        <div class="card shadow-lg p-4">
+            <!-- Notification Area -->
+            <div id="notification" class="alert d-none" role="alert"></div>
+            
+            <div class="mb-3">
+                <div id="statusText" class="mb-2 fw-bold">Iniciando...</div>
+                <div class="progress" style="height: 20px;">
+                    <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" role="progressbar" style="width: 0%;">0%</div>
+                </div>
+            </div>
+            <div class="d-grid">
+                 <button class="btn btn-secondary" id="cancelBtn" onclick="window.location.href='/'">Cancelar</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const progressBar = document.getElementById('progressBar');
+        const statusText = document.getElementById('statusText');
+        const notification = document.getElementById('notification');
+
+        // --- Helper Functions ---
+        function getTranscriptId() {
+            const params = new URLSearchParams(window.location.search);
+            return params.get('transcript_id');
+        }
+
+        function showNotification(message, type = 'danger') {
+            notification.textContent = message;
+            notification.className = `alert alert-${type} show`;
+        }
+
+        function updateProgress(percentage, text) {
+            percentage = Math.max(0, Math.min(100, percentage));
+            progressBar.style.width = percentage + '%';
+            progressBar.textContent = Math.round(percentage) + '%';
+            statusText.textContent = text;
+        }
+
+        // --- Stage 1: Poll for Transcription Status ---
+        function pollTranscriptionStatus(transcript_id) {
+            const interval = setInterval(() => {
+                fetch(`/transcription_status?transcript_id=${encodeURIComponent(transcript_id)}`)
+                .then(response => {
+                    if (!response.ok) throw new Error('Error de red al consultar estado.');
+                    return response.json();
+                })
+                .then(data => {
+                    const status = data.status || 'unknown';
+                    let progress = 0;
+                    let message = 'Esperando en la cola...';
+
+                    if (status === 'processing') {
+                        progress = 25; // Estimated progress for transcription
+                        message = 'Transcribiendo audio...';
+                    } else if (status === 'completed') {
+                        progress = 50;
+                        message = '¡Transcripción completada!';
+                        updateProgress(progress, message);
+                        clearInterval(interval); // Stop polling for transcription
+                        startVideoProcessing(transcript_id); // Move to next stage
+                        return;
+                    } else if (status === 'error') {
+                        throw new Error(data.error || 'Error durante la transcripción.');
+                    }
+                    updateProgress(progress, message);
+                })
+                .catch(error => {
+                    clearInterval(interval);
+                    showNotification(error.message);
+                    updateProgress(0, 'Fallo en la transcripción.');
+                });
+            }, 3000);
+        }
+
+        // --- Stage 2: Start and Poll for Video Processing ---
+        function startVideoProcessing(transcript_id) {
+            updateProgress(50, 'Iniciando procesamiento de video...');
+            fetch(`/burn_subtitles/${encodeURIComponent(transcript_id)}`, { method: 'POST' })
+            .then(response => {
+                if (!response.ok) throw new Error('No se pudo iniciar el procesamiento del video.');
+                return response.json();
+            })
+            .then(data => {
+                if (data.job_id) {
+                    pollVideoProcessingStatus(data.job_id, transcript_id);
+                } else {
+                    throw new Error('No se recibió un ID de trabajo para el video.');
+                }
+            })
+            .catch(error => {
+                showNotification(error.message);
+                updateProgress(50, 'Fallo al iniciar el video.');
+            });
+        }
+
+        function pollVideoProcessingStatus(job_id, transcript_id) {
+            const interval = setInterval(() => {
+                fetch(`/video_status/${encodeURIComponent(job_id)}`)
+                .then(response => {
+                    if (!response.ok) throw new Error('Error de red al consultar estado del video.');
+                    return response.json();
+                })
+                .then(data => {
+                    const status = data.status || 'unknown';
+                    // Base progress is 50% from transcription
+                    const baseProgress = 50;
+                    const videoProgress = data.progress ? data.progress / 2 : 0; // Scale 0-100 to 0-50
+                    const totalProgress = baseProgress + videoProgress;
+                    const message = data.message || 'Procesando...';
+
+                    updateProgress(totalProgress, message);
+
+                    if (status === 'completed') {
+                        clearInterval(interval);
+                        updateProgress(100, '¡Video listo! Redirigiendo...');
+                        setTimeout(() => {
+                            window.location.href = `/results?transcript_id=${transcript_id}`;
+                        }, 1500);
+                    } else if (status === 'error') {
+                        throw new Error(data.error || 'Ocurrió un error al procesar el video.');
+                    }
+                })
+                .catch(error => {
+                    clearInterval(interval);
+                    showNotification(error.message);
+                    updateProgress(50, 'Fallo en el procesamiento del video.');
+                });
+            }, 2000);
+        }
+
+        // --- Initial Load ---
+        window.onload = function() {
+            const transcript_id = getTranscriptId();
+            if (transcript_id) {
+                updateProgress(0, 'Iniciando proceso de transcripción...');
+                pollTranscriptionStatus(transcript_id);
+            } else {
+                showNotification('No se encontró un ID de transcripción en la URL.');
+                updateProgress(0, 'Error: ID de transcripción no encontrado.');
+            }
+        }
+    </script>
+</body>
+
+</html>

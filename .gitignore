@@ -1,0 +1,26 @@
+# Archivos de entorno virtual de Python
+venv/
+.venv/
+env/
+
+# Archivos de caché de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos de base de datos
+*.db
+*.sqlite3
+app_data.db
+
+# Archivo de variables de entorno
+.env
+
+# Archivos de configuración de IDE
+.idea/
+.vscode/
+
+# Archivos de sistema operativo
+.DS_Store
+Thumbs.db
